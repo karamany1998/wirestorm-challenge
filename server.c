@@ -1,5 +1,6 @@
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -16,6 +17,7 @@
 #define SOURCE_PORT     33333
 #define MAX_CONNECTIONS 20
 #define HEADER_LEN      8
+#define EVENT_TIMEOUT   30000
 
 /*
 *  This struct will hold important variables related to the 
@@ -29,9 +31,43 @@ typedef struct connection
     int thread_num;
     int currSocket;
     int message_length;
-    char msg[8200];
+    char* msg; //all threads will share the same message that's allocated on the heap
 
 }   connection_parameters;
+
+
+
+/* This functions performs the setup functionality for listening sockets.
+ * It will first call the socket() system call to return a fd referencing the socket.
+ * Then bind it to a specific ip/port pair which is given as an input
+ *
+ * Return value: -1 if unsuccessful and the socket fd otherwise
+ */
+int setup_listening_socket(struct sockaddr_in* addr)
+{
+     /*
+     * The socket system call returns an integer which is just a file descriptor
+     * that defines the listening socket.
+     * AF_INET = ipv4
+     * SOCK_STREAM = tcp
+    */
+    int sock_fd = socket(AF_INET , SOCK_STREAM , 0);
+
+    if(sock_fd == -1)
+    {
+        printf("Error in socket() system call...\n");
+        return -1;
+    }
+
+    if (bind(sock_fd , addr , sizeof(struct sockaddr_in)) == -1)
+    {
+        printf("cannot bind socket to ip/port pair \n");
+        return -1;
+    }
+
+    return sock_fd;
+}
+
 
 
 
@@ -50,7 +86,6 @@ void *receiver_handler(void* receiver_connection )
     int len_sent = 0 ; 
 
     //first we can to receive the number of bytes in the message.
-    
     
     while(msg_len>0)
     {
@@ -74,9 +109,6 @@ void *receiver_handler(void* receiver_connection )
     printf("data to send is::: %s \n" , currConnection->msg);
 
     printf("----------------------------------------\n");
-
-    
-    
     return ;  
 }
 
@@ -100,65 +132,26 @@ int main()
     struct sockaddr_in dst_client;
     socklen_t addr_size_source;
     socklen_t addr_size; 
+    char* src_msg = malloc(100000);
 
-    /*
-     * 1 magic byte + 1 padding byte + 2 byte length + 4 padding bytes 
-     * + maximum 8192 data bytes(because 2^16 / 8) = 8200 bytes
-    */
-    char message[8200];
-    memset(message , 0 , 8200);
-
-    /*
-     * The socket system call returns an integer which is just a file descriptor
-     * that defines the listening socket.
-     * AF_INET = ipv4
-     * SOCK_STREAM = tcp
-    */
-    listening_socket_destination = socket(AF_INET , SOCK_STREAM , 0); 
-    if (listening_socket_destination == -1)
-    {
-        printf("Error in socket() system call...\n");
-        return -1;
-    }
-    printf("server destination socket created successfully \n ");
-
-    listening_socket_source = socket(AF_INET , SOCK_STREAM , 0); 
-    if (listening_socket_source == -1)
-    {
-        printf("Error in socket() system call...\n");
-        return -1;
-    }
-    printf("server source socket created successfully \n ");
-    printf("--------------------------------------\n");
-
+    memset(&server_address_source , 0 , sizeof(server_address_source));
+    server_address_source.sin_family = AF_INET;
+    server_address_source.sin_port = htons(SOURCE_PORT);
+    server_address_source.sin_addr.s_addr = inet_addr("127.0.0.1");
 
     memset(&server_address_destination , 0 , sizeof(server_address_destination));
     server_address_destination.sin_family = AF_INET;
     server_address_destination.sin_port = htons(DST_PORT);
     server_address_destination.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    if (bind(listening_socket_destination , (struct sockaddr*)&server_address_destination , sizeof(server_address_destination)) == -1)
-    {
-        printf("cannot bind socket to ip/port pair \n");
-        return -1;
-    }
-    printf("destination socket successfully bind-ed to destination port \n");
+    listening_socket_source = setup_listening_socket(&server_address_source);
+    listening_socket_destination = setup_listening_socket(&server_address_destination);
 
-    memset(&server_address_source, 0 , sizeof(server_address_source));
-    server_address_source.sin_family = AF_INET;
-    server_address_source.sin_port = htons(SOURCE_PORT);
-    server_address_source.sin_addr.s_addr = inet_addr("127.0.0.1");
-    if (bind(listening_socket_source , (struct sockaddr*)&server_address_source , sizeof(server_address_source)) == -1)
-    {
-        printf("cannot bind socket to ip/port pair \n");
-        return -1;
-    }
-    printf("source socket successfully bind-ed to destination port \n");
+    
+     
+    
 
-
-   
-
-     printf("listening for incoming destination client connections... \n");
+    
     /* listen for  incoming connections from the destination clients */
     if (listen(listening_socket_destination , 1000) == -1)
     {
@@ -166,9 +159,6 @@ int main()
         return -1;
     }
     printf("listening for incoming destination client connections... \n");
-
-
-   
     /* listen for  incoming connections from the source clients */
     if (listen(listening_socket_source , 1000) == -1)
     {
@@ -181,23 +171,20 @@ int main()
 
 
     /* To make a responsive server that can handle connections and messages from 
-     *  the source clientasynchronously, I will utilise epoll. I will add the following 
+     *  the source client asynchronously, I will utilise epoll. I will add the following 
      * sockets to the epoll instance's "interest set"
      * 1- listenting_socket_source
      * 2- listenting_socket_destination
      * 3- socket that accept() returns with the source client listening socket
+     * 4- socket that accept() returns with destination client listening socket
      * 
-     * Also, this will allow me to be able to handle connection requests from destination clients in a more
+     * This will allow me to handle connection requests from destination clients in a more
      * interactive manner. Meaning, I don't have to call accept() first for all destination clients, then 
      * send them the message from the source, but I can have, for example, 3 connections, send the data from source, then
      * add other destination clients, send more data and so on. 
      * 
      * tldr: epoll is good because we'll make the server event-driven
      */
-
-
-    
-    
 
     int epoll_instance_fd = epoll_create1(0);
     if(epoll_instance_fd == -1)
@@ -245,20 +232,19 @@ int main()
     int src_client_socket = -1;
     int num_dst_clients = 0 ; 
     connection_parameters receiver_struct_arr[MAX_CONNECTIONS];
-    for(int i = 0 ; i<MAX_CONNECTIONS ; i++)
+    for(int i = 0 ; i < MAX_CONNECTIONS ; i++)
     {
         memset(&receiver_struct_arr[i] , 0 , sizeof(connection_parameters));
     }
 
     while(1)
     {
-
         /*
-        * set timeout to be maximum value until we wait for event
+        * set timeout to EVENT_TIMEOUT
         * if timeout then program will exit
         */
         printf("---------------------------------------------\n");
-        int num_events = epoll_wait(epoll_instance_fd, incoming_events, MAX_CONNECTIONS, -1);
+        int num_events = epoll_wait(epoll_instance_fd, incoming_events, MAX_CONNECTIONS, EVENT_TIMEOUT);
 
         if(num_events == 0)
         {
@@ -327,11 +313,10 @@ int main()
                 }
                 printf("received a message from the source client..\n");
                 
-                char src_msg[8200];
+               
                 int msg_len;
-                memset(src_msg, 0 , 8200);
                 //receive message.
-                msg_len = recv(src_client_socket , src_msg , 8200, 0);
+                msg_len = recv(src_client_socket , src_msg , 100000, 0);
                 
                 printf("validating message...\n");
                 printf("message length is %i \n ", msg_len);
@@ -366,23 +351,32 @@ int main()
                     continue;
                 }
 
-                if( (unsigned char) src_msg[1] == 0x00)
+                if( (unsigned char) src_msg[1] == 0x00 && 
+                    (unsigned char) src_msg[4]==0x00 &&
+                    (unsigned char) src_msg[5] == 0x00 &&
+                    (unsigned char) src_msg[6] == 0x00 && 
+                    (unsigned char) src_msg[7] == 0x00)
                 {
                     printf("correct padding \n");
                 }
                 else
                 {
                     printf("incorrect padding..Not sending \n");
+                    continue;
                 }
 
 
+
+
                 //src_msg[2] and src_msg[3] are the length in network byte order
-                printf("first len header byte is %u \n" , (uint16_t) src_msg[2]);
-                printf("second len header byte is %u \n " , (uint16_t)src_msg[3]);
-                //multiply lenFirstByte by 2^4 to shift it to left
-                uint16_t lenFirstByte = (uint16_t)src_msg[2];
-                uint16_t lenSecondByte = (uint16_t)src_msg[3];
-                uint16_t lengthHeader = lenFirstByte*16 + lenSecondByte;
+                printf("first len header byte is %c \n" ,  (unsigned char) src_msg[2]);
+                printf("second len header byte is %c \n " , (unsigned char) src_msg[3]);
+               
+                uint16_t length_network_order = 0;
+                memcpy(&length_network_order , &src_msg[2] , 2);
+                uint16_t lengthHeader = ntohs( length_network_order);
+
+                printf("total length is %i \n " , lengthHeader);
 
                 if(msg_len - 8 != lengthHeader)
                 {
@@ -407,7 +401,8 @@ int main()
                     if(receiver_struct_arr[j].currSocket==0)continue;
                     //memset(receiver_struct_arr[j].msg , 0 , 8200);
                     
-                    memcpy(receiver_struct_arr[j].msg , src_msg , msg_len);
+                    //memcpy(receiver_struct_arr[j].msg , src_msg , msg_len);
+                    receiver_struct_arr[j].msg = src_msg;
                     receiver_struct_arr[j].message_length = msg_len ;
                     
                     /* once we receive a message from the source client.
