@@ -12,7 +12,8 @@
 
 
 //used this to make my own connections using netcat to see the program flow and debug output in more detail
-//#define   TEST_LOCAL        
+//#define   TEST_LOCAL     
+
 #define DST_PORT        44444   
 #define SOURCE_PORT     33333
 #define MAX_CONNECTIONS 20
@@ -64,12 +65,8 @@ int setup_listening_socket(struct sockaddr_in* addr)
         printf("cannot bind socket to ip/port pair \n");
         return -1;
     }
-
     return sock_fd;
 }
-
-
-
 
 
 /* This function serves as the connection handler for destination clients
@@ -106,12 +103,70 @@ void *receiver_handler(void* receiver_connection )
     }
 
     printf("sending data on socket %i \n ", currConnection->currSocket);
-    printf("data to send is::: %s \n" , currConnection->msg);
+    printf("data to send is: %s \n" , currConnection->msg);
 
     printf("----------------------------------------\n");
     return ;  
 }
 
+
+
+/* This function will compute the checksum of the message received.
+ * This occurs when the sensitive bit in the options fields is set.
+ */
+uint16_t compute_checksum(char* input , uint32_t len)
+{
+    printf("---------------------------------------\n");
+    uint32_t idx = 0; 
+    printf("computing checksum.....\n");
+
+    uint32_t checksum = 0 ; 
+    uint32_t checksum_host = 0 ; 
+    while(idx < len)
+    {
+        //the problem states that we should fill in checksum field with 0xcc 0xcc when computing it
+        //just add it directly cuz I don't want to modify the string here then change it back afterwards
+        if(idx == 4)
+        {
+            checksum += (uint16_t)0xcccc;
+            idx+=2;
+            continue;
+        }
+        //handle edge case(one byte left at the end)
+        if(idx+1>=len)
+        {
+            checksum+= (unsigned char)input[idx];
+            printf("odd-length string \n");
+            break;
+        }
+        //copy over two chars(16-bit word) starting at index idx and add them to checksum
+        //need to consider network-order to host-order so use ntohs
+        uint16_t currVal = 0;
+        memcpy(&currVal, &input[idx], 2);
+        checksum += (currVal);
+        idx += 2;
+    }
+    /*
+     * We also need to consider any overflow because we are doing a 
+     * one's compelemt sum. 
+     * An easy way to do this is to add top-16 bits to 
+     * lower 16-bits and keep looping until the top 16 bits are zero
+     */
+
+    uint32_t overflow = checksum>>16;
+    printf("overflow is %u \n" , overflow);
+    printf("lower 16-bits in checksum is %u \n", (uint16_t)(checksum&0xFFFF));
+    while(overflow)
+    {   
+        
+        checksum = overflow + (checksum & 0xFFFFU);
+        overflow = checksum>>16;
+        printf("overflow is %u \n" , overflow);
+        printf("lower 16-bits in checksum is %u \n", (uint16_t)(checksum&0xFFFF));
+        printf("-----------------------------------\n");
+    }
+    return ~((uint16_t)checksum);
+}
  
 
 /*
@@ -147,11 +202,6 @@ int main()
     listening_socket_source = setup_listening_socket(&server_address_source);
     listening_socket_destination = setup_listening_socket(&server_address_destination);
 
-    
-     
-    
-
-    
     /* listen for  incoming connections from the destination clients */
     if (listen(listening_socket_destination , 1000) == -1)
     {
@@ -166,7 +216,6 @@ int main()
         return -1;
     }
     printf("listening for incoming source client connections... \n");
-
     printf("-----------------------------------------\n");
 
 
@@ -220,14 +269,12 @@ int main()
 
     int retVal = epoll_ctl(epoll_instance_fd, EPOLL_CTL_ADD, listening_socket_source, &source_client_config);
     int retVal2 = epoll_ctl(epoll_instance_fd, EPOLL_CTL_ADD, listening_socket_destination, &destination_client_config);
-
     if(retVal == -1 || retVal2 == -1)
     {
         printf("could not add to epoll interest set...Exiting..\n");
         return -1;
     }
-
-    printf("event loop started...\n");
+    
 
     int src_client_socket = -1;
     int num_dst_clients = 0 ; 
@@ -237,6 +284,7 @@ int main()
         memset(&receiver_struct_arr[i] , 0 , sizeof(connection_parameters));
     }
 
+    printf("event loop started...\n");
     while(1)
     {
         /*
@@ -315,6 +363,7 @@ int main()
                 
                
                 int msg_len;
+                memset(src_msg, 0 , 100000);
                 //receive message.
                 msg_len = recv(src_client_socket , src_msg , 100000, 0);
                 
@@ -334,13 +383,13 @@ int main()
                     continue;
                 }
 #ifndef TEST_LOCAL
-                printf("validating CMTP Message \n");
+                printf("validating CMTP Message.....\n");
                 if(msg_len < 8)
                 {
-                    printf("message is less than 8 bytes, so it's missing header information...Not Sending \n");
+                    printf("message is less than 8 bytes(must be atleast >= header size)...Not Sending \n");
                     continue;
                 }
-
+                //validate magic byte
                 if((unsigned char) src_msg[0] == 0xcc)
                 {
                     printf("received correct magic byte \n");
@@ -351,6 +400,22 @@ int main()
                     continue;
                 }
 
+                uint16_t length_network_order = 0;
+                memcpy(&length_network_order , &src_msg[2] , 2);
+                uint16_t lengthHeader = ntohs( length_network_order);
+
+                printf("total length is %i \n " , lengthHeader);
+                if(msg_len - 8 != lengthHeader)
+                {
+                    printf("length of data is incorrect..\n");
+                    printf("not sending...\n");
+                    continue;
+                }
+                else
+                {
+                    printf("message length is correct..\n");
+                }
+                /*
                 if( (unsigned char) src_msg[1] == 0x00 && 
                     (unsigned char) src_msg[4]==0x00 &&
                     (unsigned char) src_msg[5] == 0x00 &&
@@ -364,29 +429,49 @@ int main()
                     printf("incorrect padding..Not sending \n");
                     continue;
                 }
+                */
+                
+                //check option field for the sensitive bit
+                unsigned char opts = src_msg[1];
+                //if 2nd bit is 1, then compute the checksum
+                uint16_t check_checksum = (opts & 0b01000000);
+                uint16_t real_checksum = 0;
+                memcpy(&real_checksum , &src_msg[4] , 2);
 
-
-
+                uint16_t checksum = compute_checksum(src_msg, msg_len);
+                printf("real checksum network order is %u \n " , real_checksum);
+                printf("first checksum byte is %u \n", (unsigned char)(real_checksum&0xFF));
+                printf("second checksum byte is %u \n", (unsigned char)((real_checksum>>8)&0xFF));
+                printf("options field is %u \n " , opts);
+                printf("sensitive bit is %u \n " , check_checksum);
+                printf("checksum val is %u \n ", checksum);
+                
+                printf("--------------------------------\n");
 
                 //src_msg[2] and src_msg[3] are the length in network byte order
                 printf("first len header byte is %c \n" ,  (unsigned char) src_msg[2]);
                 printf("second len header byte is %c \n " , (unsigned char) src_msg[3]);
                
-                uint16_t length_network_order = 0;
-                memcpy(&length_network_order , &src_msg[2] , 2);
-                uint16_t lengthHeader = ntohs( length_network_order);
+               
 
-                printf("total length is %i \n " , lengthHeader);
-
-                if(msg_len - 8 != lengthHeader)
+                if(check_checksum)
                 {
-                    printf("length of data is incorrect..\n");
-                    printf("not sending...\n");
-                    continue;
+                    printf("need to calculate checksum....\n");
+                    printf("checksum is %u \n" , checksum);
+                    if(checksum != real_checksum)
+                    {
+                        printf("An error occurred in the message \n");
+                        printf("dropping..not sending due to checksum error \n");
+                        continue;
+                    }
+                    else
+                    {
+                        printf("checksum is correct....\n");
+                    }
                 }
-                else
+                else 
                 {
-                    printf("message length is correct..\n");
+                    printf("no need to calculate checksum...\n");
                 }
 #endif
                
@@ -459,8 +544,9 @@ int main()
 
         }
     }
-    
     }
 
+    if(src_msg!=NULL)
+    free(src_msg);
     return 0 ;
 }
