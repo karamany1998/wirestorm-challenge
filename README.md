@@ -1,10 +1,5 @@
-simple readme2
-Yahoo/Inbox
 
-Mohamed Elkaramany 
-From:karamany2012@yahoo.com
-To:Mohamed Elkaramany
-Tue, Jun 3 at 11:53 PM
+
 # Wirestorm Challenge
 ```bash
 Made sure to solve both parts of the challenge :) 
