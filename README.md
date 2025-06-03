@@ -2,7 +2,8 @@
 
 # Wirestorm Challenge
 ```bash
-Made sure to solve both parts of the challenge :) 
+Made sure to solve both parts of the challenge :)
+Note the file server.c is the "old code" which was functionally correct but I refactored it into the remaining parts.
 ```
 ## Building the project
 
@@ -27,3 +28,4 @@ such as source and destination ports, header length and MAX_CONNECTIONS..etc
 
 4- main.c: the most exciting part of the project. Used epoll() to make it event-driven and used pthreads to 
 handle sending data to the different destinations.
+5- Makefile: build the project using "make" and then run "./server" (Ez)
