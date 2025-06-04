@@ -4,6 +4,16 @@
 ```bash
 Made sure to solve both parts of the challenge :)
 Note the file server.c is the "old code" which was functionally correct but I refactored it into the remaining parts.
+
+The server is event-driven. It first sets up the listening source and destination sockets and then waits for incoming events. Note: this means that
+we can have a source and X destinations and then for example send messages from source to destination then add other destination clients later on. 
+When the source client or a destination client establishes a connections, it will handle it and crearte a socket for that connection.
+When the source sends a message, then the server will receive it and create a pthread for each destination. I used the struct connection as a wrapper around the socket fd, message to send and other values and
+passed it to the pthread.
+
+When a connection ends, then a flag "EPOLLRDHUP" is set, so I used this to remove the fd from the epoll interest set.
+
+
 ```
 ## Building the project
 
