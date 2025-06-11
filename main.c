@@ -1,54 +1,27 @@
 
 
-#include "socket_setup.h"
-/* This function serves as the connection handler for destination clients
-*  Each destination client will be a thread that will use this function to receive
-*  messages from the server
-*
-*/
-void *receiver_handler(void* receiver_connection )
-{
-    connection_parameters* currConnection = (connection_parameters* )receiver_connection;
-    
-    int msg_len = currConnection->message_length;
-    int total_sent = 0 ; 
-    int len_sent = 0 ; 
+#include "message_validation.h"
 
-    //first we can to receive the number of bytes in the message.
-    
-    while(msg_len>0)
-    {
-#ifdef TEST_LOCAL
-        len_sent = send(currConnection->currSocket , &(currConnection->msg[total_sent]), msg_len - total_sent , 0);
-#else
-         len_sent = send(currConnection->currSocket , &(currConnection->msg[total_sent]) , msg_len - total_sent, 0);
-#endif
-        if (len_sent <= 0) {
-            //printf("send() failed or returned 0 on socket %d \n", currConnection->currSocket );
-            break;
-        }
-        msg_len -= len_sent;
-        total_sent+= len_sent;
+extern int setup_listening_socket(struct sockaddr_in* );
+extern uint16_t compute_checksum(char* input , uint32_t len);
+extern uint16_t validate_length(char* msg , uint16_t msg_len);
+extern uint16_t validate_magic(char* msg);
+extern uint16_t validate_checksum(char* msg , uint16_t msg_len);
 
-        printf("sent %i bytes to client \n" , len_sent);
-        printf("remaining to send is %i \n", msg_len);
-    }
+//will map and index to an available destination socket
+//number>0 means that it's available
+uint16_t available_dest_socket[MAX_CONNECTIONS];
 
-    printf("sending data on socket %i \n ", currConnection->currSocket);
-    printf("data to send is: %s \n" , currConnection->msg);
+pthread_t worker_threads[WORKER_THREADS_NUM];
 
-    printf("----------------------------------------\n");
-    return ;  
-}
 
-/*
-* An  array of threads. 
-* Each of which will handle a connection between the server and a reciever client.
-*/
-pthread_t receiver_thread[MAX_CONNECTIONS];
+//this is just done for debug purposes, each task will get a unique sequence number
+//to see how the main thread inserts and how the worker threads consume the tasks
+uint32_t sequence_number = 0 ; 
 
 int main()
 {
+    
     int listening_socket_source;
     int listening_socket_destination;
     int client_connection;
@@ -60,6 +33,14 @@ int main()
     socklen_t addr_size_source;
     socklen_t addr_size; 
     char* src_msg = malloc(100000);
+    pthread_mutex_init(&queue_lock , NULL);
+    pthread_cond_init(&queue_condition, NULL);
+
+    printf("setting qu to NULL \n");
+    qu = malloc(sizeof(thread_queue));
+    qu->firstNode =  NULL;
+    qu->lastNode  = NULL;
+    numTask = 0 ;
 
     memset(&server_address_source , 0 , sizeof(server_address_source));
     server_address_source.sin_family = AF_INET;
@@ -73,6 +54,13 @@ int main()
 
     listening_socket_source = setup_listening_socket(&server_address_source);
     listening_socket_destination = setup_listening_socket(&server_address_destination);
+
+    for(int i = 0; i< WORKER_THREADS_NUM ; i++)
+    {
+        pthread_create(&worker_threads[i], NULL, receiver_handler , NULL);
+    }
+
+    for(int i = 0 ; i<MAX_CONNECTIONS ; i++)available_dest_socket[i]=0;
 
     /* listen for  incoming connections from the destination clients */
     if (listen(listening_socket_destination , 1000) == -1)
@@ -149,11 +137,7 @@ int main()
     
     int src_client_socket = -1;
     int num_dst_clients = 0 ; 
-    connection_parameters receiver_struct_arr[MAX_CONNECTIONS];
-    for(int i = 0 ; i < MAX_CONNECTIONS ; i++)
-    {
-        memset(&receiver_struct_arr[i] , 0 , sizeof(connection_parameters));
-    }
+    
 
     printf("event loop started...\n");
     while(1)
@@ -205,9 +189,9 @@ int main()
                 printf("accepted a new destination connection on socket %i \n" , client_connection);
                 for(int j = 0 ; j<MAX_CONNECTIONS ; j++)
                 {
-                    if(receiver_struct_arr[j].currSocket==0)
+                    if(available_dest_socket[j]==0)
                     {
-                        receiver_struct_arr[j].currSocket = client_connection;
+                        available_dest_socket[j] = client_connection;
                         printf("Adding destination socket to the epoll interest set to handle closing the destination sockets.. \n");
                         destination_client_connection_config[j].data.fd = client_connection;
                         epoll_ctl(epoll_instance_fd, EPOLL_CTL_ADD, client_connection, &destination_client_connection_config[j]);
@@ -238,6 +222,8 @@ int main()
                 
                 printf("validating message...\n");
                 printf("message length is %i \n ", msg_len);
+
+
                 if(msg_len == -1)
                 {   
                     printf("did not receive properly... \n");
@@ -273,37 +259,41 @@ int main()
 #ifndef TEST_LOCAL
                 printf("received message is : %s  \n", &src_msg[8]);
 #endif
-                //copy message over to each dst struct
+
+                //construct a task and insert it in the queue
                 int dstCnt = 0;
-                for(int j = 0 ; j<MAX_CONNECTIONS  ; j++)
+                
+                
+                for(int j = 0 ; j<MAX_CONNECTIONS ; j++)
                 {
-                    if(receiver_struct_arr[j].currSocket==0)continue;
-                    //memset(receiver_struct_arr[j].msg , 0 , 8200);
+                    if(available_dest_socket[j] == 0)continue;
                     
-                    //memcpy(receiver_struct_arr[j].msg , src_msg , msg_len);
-                    receiver_struct_arr[j].msg = src_msg;
-                    receiver_struct_arr[j].message_length = msg_len ;
+                    task* newTask = malloc(sizeof(task));
+                    newTask->dest_socket = available_dest_socket[j];
+                    newTask->message_length = msg_len;
+                    newTask->msg = malloc(msg_len);
+                    newTask->seq_num = sequence_number++;
+
+                    printf("copying message to task.... \n");
+                    memcpy(newTask->msg , src_msg, msg_len);
+                    node* newNode = malloc(sizeof(newNode));
+
                     
-                    /* once we receive a message from the source client.
-                    * We can create a thread for each destination client to send 
-                    * the message
-                    */
-                    int ret = pthread_create(&receiver_thread[j], NULL, receiver_handler, &receiver_struct_arr[j]);
-                    if(ret == -1)
-                    {
-                        printf("failed to create thread....\n");
-                        return -1;
-                    }
+                    newNode->currTask = newTask;
+                    newNode->next = NULL;
                     
+
+                    pthread_mutex_lock(&queue_lock);
+                
+                        numTask++;
+                        printf("In critical section....inserting in queue....\n");
+                        insertNode(newNode);
+
+                    pthread_mutex_unlock(&queue_lock);
+                    pthread_cond_signal(&queue_condition);
+                    printf("main inserted new task to task queue with sequence number %d \n", newTask->seq_num);
                 }
                 
-                for(int j = 0 ; j<MAX_CONNECTIONS; j++)
-                {
-                    if(receiver_struct_arr[j].currSocket ==0)continue;
-
-                    pthread_join(receiver_thread[j] , NULL);
-                }
-
             }
             else
             {
@@ -321,10 +311,10 @@ int main()
                 printf("destination socket with df %i closed...\n" , dst_fd);
                 for(int j  = 0 ; j<MAX_CONNECTIONS ; j++)
                 {
-                    if(receiver_struct_arr[j].currSocket == dst_fd)
+                    if(available_dest_socket[j] == dst_fd)
                     {
                         printf("found dest in thread pool \n");
-                        receiver_struct_arr[j].currSocket = 0 ;
+                        available_dest_socket[j] = 0 ;
 
                         epoll_ctl(epoll_instance_fd , EPOLL_CTL_DEL , dst_fd , NULL);
                         break;
@@ -337,5 +327,9 @@ int main()
     }
 
     if(src_msg != NULL)free(src_msg);
+
+    pthread_mutex_destroy(&queue_lock);
+    pthread_cond_destroy(&queue_condition);
+
     return 0 ;
 }

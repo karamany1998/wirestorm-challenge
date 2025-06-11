@@ -138,3 +138,4 @@ uint16_t validate_checksum(char* msg , uint16_t msg_len)
 
     return ans;
 }
+
