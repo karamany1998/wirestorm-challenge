@@ -19,8 +19,6 @@ passed it to the pthread.
 
 When a connection ends, then a flag "EPOLLRDHUP" is set, so I used this to remove the fd from the epoll interest set.
 
-Improvements on current design: A problem that could cause ineffiency with a large number of destination clients is that the program creates a pthread for every destination. A better approach would be to utilise a thread pool with a fixed number of threads and have the main loop put a task in a queue. Then each pthread in the pool will dequeue tasks and handle them. of course need to use mutexes to safely enque and dequeue the tasks. I'm currently working on this improvement.
-
 
 ```
 ## Building the project
@@ -49,4 +47,7 @@ such as source and destination ports, header length and MAX_CONNECTIONS..etc
 
 4- main.c: the most exciting part of the project. Used epoll() to make it event-driven and used pthreads to 
 handle sending data to the different destinations.
-5- Makefile: build the project using "make" and then run "./server" (Ez)
+
+5- thread_utils.h and thread_utils.c: Provides functionality for worker threads and some data structures necessary. Provides some functions to add/remove from
+task queue.
+6- Makefile: build the project using "make" and then run "./server" (Ez)
