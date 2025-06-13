@@ -54,7 +54,7 @@ node* getNode()
 void *receiver_handler()
 {
     //each worker thread will continuosly keep checking for new tasks to be performed
-    while(1)
+    while(!exit_condition)
     {   
         task* currTask = NULL;
         pthread_mutex_lock(&queue_lock);
@@ -65,18 +65,17 @@ void *receiver_handler()
             pthread_cond_wait(&queue_condition , &queue_lock);
         }
 
-       
-
         //at this position we know there's task in the queue and we deque it safely because we have the 
         //lock(which we aquired when we exited the pthread_cond_wait() )
         node* firstElement = getNode();
         if(firstElement == NULL)
         {
             printf("queue is empty...\n");
+            continue;
         }
         currTask = firstElement->currTask;
         numTask--;
-         printf("thread finished waiting for queue to have task...num task: %d \n" , numTask);
+        printf("thread finished waiting for queue to have task...num task: %d \n" , numTask);
         printf("task has sequence number: %u \n", currTask->seq_num );
         pthread_mutex_unlock(&queue_lock);
 
@@ -106,5 +105,5 @@ void *receiver_handler()
         printf("----------------------------------------\n");
 
 }
-    return ;  
+    return NULL; 
 }

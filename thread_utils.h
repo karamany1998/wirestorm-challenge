@@ -59,7 +59,7 @@ extern int numTask;
 
 
 extern thread_queue* qu;
-
+extern uint16_t exit_condition;
 
 
 #endif

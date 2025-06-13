@@ -18,6 +18,7 @@ pthread_t worker_threads[WORKER_THREADS_NUM];
 //this is just done for debug purposes, each task will get a unique sequence number
 //to see how the main thread inserts and how the worker threads consume the tasks
 uint32_t sequence_number = 0 ; 
+uint16_t exit_condition = 0;
 
 int main()
 {
@@ -32,7 +33,7 @@ int main()
     struct sockaddr_in dst_client;
     socklen_t addr_size_source;
     socklen_t addr_size; 
-    char* src_msg = malloc(100000);
+    char* src_msg = malloc(65537); //2^16 = 65536*max message size, so just allocate buffer beforehand)
     pthread_mutex_init(&queue_lock , NULL);
     pthread_cond_init(&queue_condition, NULL);
 
@@ -328,8 +329,18 @@ int main()
 
     if(src_msg != NULL)free(src_msg);
 
+    pthread_mutex_lock(&queue_lock);
+
+        exit_condition = 1;
+    pthread_cond_broadcast(&queue_condition);
+    printf("broadcasting exit condition..\n");
+    pthread_mutex_unlock(&queue_lock);
+    
+
     pthread_mutex_destroy(&queue_lock);
     pthread_cond_destroy(&queue_condition);
+
+    
 
     return 0 ;
 }
