@@ -15,7 +15,9 @@ When the source client or a destination client establishes a connections,
 it will handle it and create a socket for that connection.
 When the source sends a message, then the server will receive it and enqueue the message as a task inside a task queue.
 then a worker thread will dequeue the task and execute it(i.e send the message to the destination).
-The task queue has to be protected by a muted and also the main thread will utilise a condition variable to signal that the task queue is not empty. Worker threads will wait(sleep) until that condition variable is signalled. this is used to not waste cpu resources(no busy waiting).
+The task queue has to be protected by a mutex to avoid any race conditions and also the
+main thread will utilise a condition variable to signal that the task queue is not empty.
+Worker threads will wait(sleep) until that condition variable is signalled. This is used to not waste cpu resources(no busy waiting).
 
 When a connection ends, then a flag "EPOLLRDHUP" is set, so I used this to remove the fd from the epoll interest set.
 
