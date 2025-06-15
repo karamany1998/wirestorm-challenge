@@ -36,6 +36,7 @@ node* getNode()
 {
     numTask--;
     node* ret = qu->firstNode;
+    if(ret == NULL)return NULL;
     if(qu->firstNode == qu->lastNode)
     {
         qu->firstNode = NULL;
@@ -60,9 +61,15 @@ void *receiver_handler()
         pthread_mutex_lock(&queue_lock);
 
         //wait as long as there're no tasks in the task queue
-        while(numTask==0)
+        while(numTask==0 && !exit_condition) 
         {
             pthread_cond_wait(&queue_condition , &queue_lock);
+        }
+
+        if(exit_condition && numTask==0)
+        {
+            pthread_mutex_unlock(&queue_lock);
+            break;
         }
 
         //at this position we know there's task in the queue and we deque it safely because we have the 
@@ -100,7 +107,6 @@ void *receiver_handler()
         }
 
         printf("sending data on socket %i \n ", currTask->dest_socket);
-        printf("data to send is: %s \n" , currTask->msg);
 
         printf("----------------------------------------\n");
 

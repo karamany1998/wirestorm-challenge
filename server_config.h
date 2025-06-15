@@ -25,7 +25,7 @@
 #define SOURCE_PORT         33333
 #define MAX_CONNECTIONS     20
 #define HEADER_LEN          8
-#define EVENT_TIMEOUT       30000
+#define EVENT_TIMEOUT       20000
 #define WORKER_THREADS_NUM  8
 
 

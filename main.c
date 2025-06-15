@@ -257,10 +257,6 @@ int main()
 #endif
                
 
-#ifndef TEST_LOCAL
-                printf("received message is : %s  \n", &src_msg[8]);
-#endif
-
                 //construct a task and insert it in the queue
                 int dstCnt = 0;
                 
@@ -305,7 +301,7 @@ int main()
                 int dst_fd = incoming_events[i].data.fd;
                 if(close(dst_fd) == -1)
                 {
-                continue; 
+                    continue; 
                 }
 
                 num_dst_clients--;
@@ -330,16 +326,21 @@ int main()
     if(src_msg != NULL)free(src_msg);
 
     pthread_mutex_lock(&queue_lock);
+    exit_condition = 1;
+    pthread_mutex_unlock(&queue_lock);
 
-        exit_condition = 1;
     pthread_cond_broadcast(&queue_condition);
     printf("broadcasting exit condition..\n");
-    pthread_mutex_unlock(&queue_lock);
-    
-
     pthread_mutex_destroy(&queue_lock);
     pthread_cond_destroy(&queue_condition);
 
+
+    for(int i = 0 ; i<WORKER_THREADS_NUM ; i++)
+    {
+        pthread_join(worker_threads[i], NULL);
+    }
+
+   
     
 
     return 0 ;
